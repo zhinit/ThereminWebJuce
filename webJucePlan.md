@@ -19,9 +19,9 @@ ThereminWebJuce/
 │   └── package.json
 ```
 
-## Step 1: CMake Build Configuration
+## Step 1: CMake Build Configuration ✅
 
-Use CPM to fetch JUCE (same pattern as the Theremin plugin project). Create a plain executable target instead of `juce_add_plugin`, linking only the headless DSP modules.
+Use CPM to fetch JUCE (pinned to 8.0.12). Create a plain executable target instead of `juce_add_plugin`, linking only the headless DSP modules. Patch JUCE source at configure time to fix Emscripten compatibility issues.
 
 ```cmake
 cmake_minimum_required(VERSION 3.24)
@@ -38,12 +38,35 @@ endif()
 include(${CPM_DOWNLOAD_LOCATION})
 
 CPMAddPackage(
-    NAME juce
-    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG origin/master
+  NAME juce
+  GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+  GIT_TAG 8.0.12
 )
 
+# Patch JUCE for Emscripten/WASM compatibility
+if(EMSCRIPTEN)
+  set(_juce_src "${juce_SOURCE_DIR}/modules/juce_core/native")
+
+  # Fix: thread priorities table has no WASM entries (zero-length array)
+  file(READ "${_juce_src}/juce_ThreadPriorities_native.h" _tp_content)
+  string(REPLACE "JUCE_LINUX || JUCE_BSD" "JUCE_LINUX || JUCE_BSD || JUCE_WASM" _tp_content "${_tp_content}")
+  file(WRITE "${_juce_src}/juce_ThreadPriorities_native.h" "${_tp_content}")
+
+  # Fix: missing emscripten.h include for emscripten_get_now()
+  file(READ "${_juce_src}/juce_SystemStats_wasm.cpp" _ss_content)
+  string(FIND "${_ss_content}" "#include <emscripten.h>" _found)
+  if(_found EQUAL -1)
+    string(PREPEND _ss_content "#include <emscripten.h>\n")
+    file(WRITE "${_juce_src}/juce_SystemStats_wasm.cpp" "${_ss_content}")
+  endif()
+endif()
+
 add_executable(audio-engine dsp/oscillator.cpp)
+
+target_compile_definitions(audio-engine PRIVATE
+    JUCE_USE_CURL=0
+    JUCE_WEB_BROWSER=0
+)
 
 target_link_libraries(audio-engine PRIVATE
     juce::juce_core
@@ -51,15 +74,15 @@ target_link_libraries(audio-engine PRIVATE
     juce::juce_dsp
 )
 
-# Emscripten linker flags
+# Emscripten linker flags (SHELL: prefix prevents CMake from splitting on spaces)
 target_link_options(audio-engine PRIVATE
     --bind
-    -s MODULARIZE=1
-    -s EXPORT_NAME="createAudioEngine"
-    -s ENVIRONMENT='web,worker'
-    -s SINGLE_FILE=1
-    -s EXPORTED_FUNCTIONS=["_malloc","_free"]
-    -s EXPORTED_RUNTIME_METHODS=["ccall","cwrap","HEAPF32"]
+    "SHELL:-s MODULARIZE=1"
+    "SHELL:-s EXPORT_NAME=createAudioEngine"
+    "SHELL:-s ENVIRONMENT=web,worker"
+    "SHELL:-s SINGLE_FILE=1"
+    "SHELL:-s EXPORTED_FUNCTIONS=['_malloc','_free']"
+    "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32']"
 )
 
 # Output into frontend/public/
@@ -79,7 +102,7 @@ cmake --build build
 
 `emcmake` wraps CMake with Emscripten's toolchain so `em++` is used automatically.
 
-## Step 2: Validate JUCE Compiles to WASM
+## Step 2: Validate JUCE Compiles to WASM ✅
 
 Before writing real DSP code, verify that JUCE's modules compile under Emscripten. Create a minimal `oscillator.cpp` that just includes the header:
 
@@ -90,7 +113,17 @@ Before writing real DSP code, verify that JUCE's modules compile under Emscripte
 int main() { return 0; }
 ```
 
-Run the build. If this fails, you'll need to stub out platform-specific code or add compile definitions to disable unsupported JUCE features. This is the highest-risk step.
+Run the build. Two JUCE bugs surfaced and are fixed by the CMake patches above:
+
+1. **`juce_ThreadPriorities_native.h`** — The thread priority lookup table has `#if` branches for Linux, BSD, Mac, Windows but not WASM, resulting in a zero-length array that fails `static_assert` and `std::size`/`std::begin`/`std::end`. Fixed by adding `|| JUCE_WASM` to the Linux/BSD branch (all-zeros, same as Linux).
+
+2. **`juce_SystemStats_wasm.cpp`** — Uses `emscripten_get_now()` without including `<emscripten.h>`. Fixed by prepending the include.
+
+Additional lessons learned:
+- **Pin JUCE to a release tag** (8.0.12) instead of `origin/master` for reproducible builds.
+- **Don't fake `JUCE_LINUX=1`** — it pulls in Linux-only headers like `sys/prctl.h` that Emscripten doesn't provide.
+- **Use `SHELL:` prefix** for Emscripten `-s` linker flags to prevent CMake from splitting `-s KEY=VALUE` into separate arguments.
+- **Use CMake `file(READ)`/`file(WRITE)`** for patching instead of `PATCH_COMMAND` with shell scripts, which has escaping issues.
 
 ## Step 3: Write the JUCE Oscillator
 
