@@ -125,7 +125,7 @@ Additional lessons learned:
 - **Use `SHELL:` prefix** for Emscripten `-s` linker flags to prevent CMake from splitting `-s KEY=VALUE` into separate arguments.
 - **Use CMake `file(READ)`/`file(WRITE)`** for patching instead of `PATCH_COMMAND` with shell scripts, which has escaping issues.
 
-## Step 3: Write the JUCE Oscillator
+## Step 3: Write the JUCE Oscillator ✅
 
 Replace raw `std::sin` phase accumulation with `juce::dsp::Oscillator`. Keep the Embind interface identical so the frontend doesn't change.
 
@@ -137,6 +137,7 @@ class SineOscillator {
 public:
     SineOscillator() {
         oscillator.initialise([](float x) { return std::sin(x); });
+        oscillator.setFrequency(440.0f);
     }
 
     void setPlaying(bool playing) { playing_ = playing; }
@@ -183,9 +184,9 @@ Key JUCE concepts used:
 - `juce::dsp::ProcessSpec` — configures sample rate and buffer size
 - `juce::dsp::AudioBlock` / `ProcessContextReplacing` — wraps raw float buffers for JUCE's processing pipeline
 
-## Step 4: Frontend (Copy from TherminWeb)
+## Step 4: Frontend (Copy from TherminWeb) ✅
 
-Copy these files from the current TherminWeb project with no modifications:
+Copied these files from the TherminWeb project with no modifications:
 
 - `frontend/src/App.tsx` — React UI with play/stop button
 - `frontend/src/main.tsx` — React entry point
@@ -195,7 +196,7 @@ Copy these files from the current TherminWeb project with no modifications:
 
 No frontend changes needed because the Embind API (class name, method names, signatures) is identical.
 
-## Step 5: Run
+## Step 5: Run ✅
 
 ```bash
 # Build WASM
@@ -208,8 +209,17 @@ npm install
 npm run dev
 ```
 
-Open browser, click play, hear 440Hz sine wave — now powered by JUCE DSP.
+Open browser, click play — sound is produced from JUCE DSP compiled to WASM.
 
-## Risks
+## Known Issues
 
-**JUCE + Emscripten compatibility** is the main risk. JUCE wasn't designed for WASM. The core and DSP modules are mostly portable math/data code and should compile, but platform-specific code paths may need `#ifdef` workarounds or compile definition overrides. Step 2 exists specifically to surface these issues early.
+- **Audio output sounds distorted** — the oscillator produces sound but it doesn't sound like a clean sine wave. Likely a bug in how the JUCE oscillator interacts with the AudioWorklet buffer (possibly related to `prepare()` being called before `setFrequency()`, or `AudioBlock` wrapping). Needs debugging in a follow-up session.
+- **ENVIRONMENT flag** — AudioWorklets run in a context that Emscripten detects as "shell", so `shell` must be included in `-s ENVIRONMENT=web,worker,shell`.
+
+## Risks (Resolved)
+
+**JUCE + Emscripten compatibility** was the main risk. Two bugs were found and patched at CMake configure time:
+1. Zero-length thread priority table (no `JUCE_WASM` branch)
+2. Missing `<emscripten.h>` include in the WASM system stats file
+
+These are bugs in JUCE 8.0.12's Emscripten support. The patches are minimal and applied automatically via CMake `file(READ)`/`file(WRITE)` in an `if(EMSCRIPTEN)` block.
