@@ -15,7 +15,7 @@ class DSPProcessor extends AudioWorkletProcessor {
       const createAudioEngine = fn();
       const module = await createAudioEngine();
       this.engine = new module.SineOscillator();
-      this.engine.setSampleRate(sampleRate);
+      this.engine.prepare(sampleRate);
       this.module = module;
       this.port.postMessage({ type: "ready" });
     }
@@ -51,7 +51,7 @@ class DSPProcessor extends AudioWorkletProcessor {
     const wasmOutput = new Float32Array(
       this.module.HEAPF32.buffer,
       this.heapBuffer,
-      numSamples
+      numSamples,
     );
     output.set(wasmOutput);
 

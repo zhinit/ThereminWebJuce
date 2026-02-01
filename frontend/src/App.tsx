@@ -53,7 +53,7 @@ function App() {
 
   return (
     <div>
-      <h1>C++ WASM Sine Wave</h1>
+      <h1>C++ JUCE WASM Saw Wave with Filter POC</h1>
       <button
         onClick={togglePlay}
         style={{ padding: "1rem 2rem", fontSize: "1.2rem" }}
