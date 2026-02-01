@@ -58,7 +58,7 @@ function App() {
         onClick={togglePlay}
         style={{ padding: "1rem 2rem", fontSize: "1.2rem" }}
       >
-        {isPlaying ? "Stop" : "Play 440Hz"}
+        {isPlaying ? "Stop" : "Play 110Hz"}
       </button>
       {!isReady && audioContextRef.current && <p>Loading WASM...</p>}
     </div>

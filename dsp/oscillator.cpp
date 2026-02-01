@@ -23,7 +23,7 @@ public:
 
         for (int i = 0; i < numSamples; ++i) {
             const float phaseInc = doublePi * frequency_ / sampleRate_;
-            output[i] = std::sin(phase_);
+            output[i] = phase_ / pi - 1.0f;
             phase_ += phaseInc;
 
             if (phase_ >= doublePi)
@@ -33,9 +33,10 @@ public:
 
 private:
     static constexpr float doublePi = 2.0f * std::numbers::pi_v<float>;
+    static constexpr float pi = std::numbers::pi_v<float>;
     float phase_ = 0.0f;
     float sampleRate_ = 44100.0f;
-    float frequency_ = 440.0f;
+    float frequency_ = 110.0f;
     bool playing_ = false;
 };
 
