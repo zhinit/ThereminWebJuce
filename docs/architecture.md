@@ -15,7 +15,7 @@ AudioWorklet (dsp-processor.js)
     v
 WASM Module (oscillator.cpp compiled by Emscripten)
     |
-    | JUCE dsp::Oscillator fills a float buffer
+    | Manual sine wave with phase accumulation fills a float buffer
     v
 AudioWorklet copies buffer to browser audio output
     |
@@ -25,15 +25,15 @@ Speakers
 
 ## The Three Layers
 
-### 1. C++ / JUCE DSP Layer (`dsp/oscillator.cpp`)
+### 1. C++ DSP Layer (`dsp/oscillator.cpp`)
 
-This is the audio engine. It uses JUCE's DSP module to generate audio samples.
+This is the audio engine. It generates audio samples using manual phase-accumulation sine wave synthesis (no JUCE DSP module).
 
-**What JUCE provides:**
-- `juce::dsp::Oscillator<float>` — a wavetable oscillator that handles phase accumulation internally. You give it a function (like `std::sin`) and a frequency, and it produces samples.
-- `juce::dsp::ProcessSpec` — a struct that tells the oscillator the sample rate, buffer size, and channel count.
-- `juce::dsp::AudioBlock<float>` — a lightweight wrapper around a raw `float*` buffer that JUCE's processing pipeline expects.
-- `juce::dsp::ProcessContextReplacing<float>` — wraps an AudioBlock and tells the processor to write output in-place (replacing the input buffer contents).
+**How the oscillator works:**
+- Maintains a `phase_` accumulator that increments by `2π * frequency / sampleRate` each sample
+- Outputs `std::sin(phase_)` per sample
+- Wraps phase at `2π` to prevent numerical overflow
+- This approach was ported from the Theremin VST's `SineWave` class after `juce::dsp::Oscillator` produced distorted output in the WASM environment (likely due to `AudioBlock` mishandling raw pointer memory layout under Emscripten)
 
 **How it's exposed to JavaScript:**
 The class is exposed via Emscripten's `embind` system (`EMSCRIPTEN_BINDINGS` macro). This generates JavaScript bindings so the AudioWorklet can call C++ methods like `engine.setFreq(440)` or `engine.process(ptr, 128)` directly.
@@ -53,12 +53,12 @@ The AudioWorklet is a browser API for real-time audio processing. It runs on a d
 **Audio processing flow (called ~344 times/second at 44.1kHz):**
 1. Browser calls `process(inputs, outputs)` with a 128-sample output buffer
 2. Worklet allocates WASM heap memory via `module._malloc()` (reuses if already allocated)
-3. Worklet calls `engine.process(heapPtr, 128)` — JUCE writes samples into WASM heap
+3. Worklet calls `engine.process(heapPtr, 128)` — C++ writes samples into WASM heap
 4. Worklet creates a `Float32Array` view into the WASM heap at that address
 5. Worklet copies the samples into the browser's output buffer via `output.set(wasmOutput)`
 
 **Why the memory dance?**
-JavaScript's `Float32Array` output buffer lives in JS memory. JUCE writes into WASM linear memory (a separate `ArrayBuffer`). You can't pass the JS buffer directly to WASM — you have to allocate space in the WASM heap, let C++ write there, then copy back to JS.
+JavaScript's `Float32Array` output buffer lives in JS memory. C++ writes into WASM linear memory (a separate `ArrayBuffer`). You can't pass the JS buffer directly to WASM — you have to allocate space in the WASM heap, let C++ write there, then copy back to JS.
 
 ### 3. React UI Layer (`frontend/src/App.tsx`)
 
@@ -78,7 +78,7 @@ The build uses three tools together:
 
 **Emscripten** is a C++ to WebAssembly compiler. The `emcmake` wrapper sets CMake's toolchain file so that `em++` is used instead of `clang++`/`g++`. The output is a `.js` file (Emscripten glue code) with WASM embedded inline (`SINGLE_FILE=1`).
 
-**CMake** ties it together. The target is a plain `add_executable` (not `juce_add_plugin`) linking only headless JUCE modules: `juce_core`, `juce_audio_basics`, `juce_dsp`. No GUI, no audio device I/O — just the math.
+**CMake** ties it together. The target is a plain `add_executable` (not `juce_add_plugin`) linking only headless JUCE modules: `juce_core` and `juce_audio_basics`. No GUI, no audio device I/O. The `juce_dsp` module was removed after switching to manual sine wave generation.
 
 ### Key Emscripten Flags
 

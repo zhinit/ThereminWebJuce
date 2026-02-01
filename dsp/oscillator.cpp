@@ -1,22 +1,16 @@
-#include <juce_dsp/juce_dsp.h>
+#include <cmath>
+#include <numbers>
 #include <emscripten/bind.h>
 
 class SineOscillator {
 public:
-    SineOscillator() {
-        oscillator.initialise([](float x) { return std::sin(x); });
-        oscillator.setFrequency(440.0f);
-    }
+    SineOscillator() = default;
 
     void setPlaying(bool playing) { playing_ = playing; }
-    void setFreq(float freq) { oscillator.setFrequency(freq); }
+    void setFreq(float freq) { frequency_ = freq; }
 
     void setSampleRate(float sampleRate) {
-        juce::dsp::ProcessSpec spec;
-        spec.sampleRate = sampleRate;
-        spec.maximumBlockSize = 512;
-        spec.numChannels = 1;
-        oscillator.prepare(spec);
+        sampleRate_ = sampleRate;
     }
 
     void process(uintptr_t outputPtr, int numSamples) {
@@ -27,13 +21,21 @@ public:
             return;
         }
 
-        juce::dsp::AudioBlock<float> block(&output, 1, numSamples);
-        juce::dsp::ProcessContextReplacing<float> context(block);
-        oscillator.process(context);
+        for (int i = 0; i < numSamples; ++i) {
+            const float phaseInc = doublePi * frequency_ / sampleRate_;
+            output[i] = std::sin(phase_);
+            phase_ += phaseInc;
+
+            if (phase_ >= doublePi)
+                phase_ -= doublePi;
+        }
     }
 
 private:
-    juce::dsp::Oscillator<float> oscillator;
+    static constexpr float doublePi = 2.0f * std::numbers::pi_v<float>;
+    float phase_ = 0.0f;
+    float sampleRate_ = 44100.0f;
+    float frequency_ = 440.0f;
     bool playing_ = false;
 };
 

@@ -45,7 +45,6 @@ target_compile_definitions(audio-engine PRIVATE
 target_link_libraries(audio-engine PRIVATE
   juce::juce_core
   juce::juce_audio_basics
-  juce::juce_dsp
 )
 
 # Emscripten linker flags
