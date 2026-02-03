@@ -14,14 +14,19 @@ class DSPProcessor extends AudioWorkletProcessor {
       const fn = new Function(data.scriptCode + "; return createAudioEngine;");
       const createAudioEngine = fn();
       const module = await createAudioEngine();
-      this.engine = new module.SineOscillator();
+      this.engine = new module.Sampler();
       this.engine.prepare(sampleRate);
       this.module = module;
       this.port.postMessage({ type: "ready" });
     }
+    if (data.type === "loadSample") {
+      const samplePtr = this.module._malloc(data.samples.length * 4);
+      this.module.HEAPF32.set(data.samples, samplePtr / 4);
+      this.engine?.loadSample(samplePtr, data.samples.length);
+    }
     // when ui sends play msg
     if (data.type === "play") {
-      this.engine?.setPlaying(true);
+      this.engine?.trigger();
     }
     // when ui sends stop msg
     if (data.type === "stop") {
