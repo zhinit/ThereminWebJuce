@@ -14,10 +14,12 @@ public:
 
     void prepare(float sampleRate) {
         sampleRate_ = sampleRate;
-
-        playbackPosition_ = 0.0f;
+        playbackPosition_ = 0;
         sampleIsPlaying_ = false;
+    }
 
+    void trigger() {
+        playbackPosition_ = 0;
     }
 
     void process(uintptr_t outputPtr, int numSamples) {
@@ -29,7 +31,12 @@ public:
         }
 
         for (int i = 0; i < numSamples; ++i) {
-            output[i] = 0.0f; // placeholder
+            if (playbackPosition_ < sampleLength_) {
+                output[i] = sampleData_[playbackPosition_];
+                ++playbackPosition_;
+            } else {
+                output[i] = 0.0f;
+            }
         }
     }
 
@@ -39,15 +46,15 @@ private:
 
     float* sampleData_;
     size_t sampleLength_;
-    float playbackPosition_;
-    bool sampleIsPlaying_;
+    size_t playbackPosition_;
 };
 
 EMSCRIPTEN_BINDINGS(audio_module) {
     emscripten::class_<Sampler>("Sampler")
         .constructor()
         .function("setPlaying", &Sampler::setPlaying)
-        .function("loadSample", &Sampler::prepare)
+        .function("loadSample", &Sampler::loadSample)
+        .function("trigger", &Sampler::trigger)
         .function("prepare", &Sampler::prepare)
         .function("process", &Sampler::process);
 }
