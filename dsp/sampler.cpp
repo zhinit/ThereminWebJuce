@@ -25,10 +25,10 @@ public:
     void process(uintptr_t outputPtr, int numSamples) {
         float* output = reinterpret_cast<float*>(outputPtr);
 
-        if (!playing_) {
-            std::fill(output, output + numSamples, 0.0f);
-            return;
-        }
+        // if (!playing_) {
+        //     std::fill(output, output + numSamples, 0.0f);
+        //     return;
+        // }
 
         for (int i = 0; i < numSamples; ++i) {
             if (playbackPosition_ < sampleLength_) {
@@ -52,7 +52,7 @@ private:
 EMSCRIPTEN_BINDINGS(audio_module) {
     emscripten::class_<Sampler>("Sampler")
         .constructor()
-        .function("setPlaying", &Sampler::setPlaying)
+        // .function("setPlaying", &Sampler::setPlaying)
         .function("loadSample", &Sampler::loadSample)
         .function("trigger", &Sampler::trigger)
         .function("prepare", &Sampler::prepare)

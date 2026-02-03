@@ -35,7 +35,7 @@ if(EMSCRIPTEN)
   endif()
 endif()
 
-add_executable(audio-engine dsp/oscillator.cpp)
+add_executable(audio-engine dsp/sampler.cpp)
 
 target_compile_definitions(audio-engine PRIVATE
     JUCE_USE_CURL=0
