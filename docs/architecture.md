@@ -27,13 +27,14 @@ Speakers
 
 ### 1. C++ DSP Layer (`dsp/oscillator.cpp`)
 
-This is the audio engine. It generates audio samples using manual phase-accumulation sine wave synthesis (no JUCE DSP module).
+This is the audio engine. It generates audio samples using manual phase-accumulation saw wave synthesis, filtered through a JUCE low-pass filter.
 
 **How the oscillator works:**
 - Maintains a `phase_` accumulator that increments by `2π * frequency / sampleRate` each sample
-- Outputs `std::sin(phase_)` per sample
+- Outputs a saw wave via `phase_ / π - 1.0` (linear ramp from -1 to +1 per cycle)
 - Wraps phase at `2π` to prevent numerical overflow
-- This approach was ported from the Theremin VST's `SineWave` class after `juce::dsp::Oscillator` produced distorted output in the WASM environment (likely due to `AudioBlock` mishandling raw pointer memory layout under Emscripten)
+- The saw output is passed through a `juce::dsp::StateVariableTPTFilter` set to low-pass mode, which smooths the harsh harmonics
+- The original sine wave approach was ported from the Theremin VST's `SineWave` class after `juce::dsp::Oscillator` produced distorted output in the WASM environment (likely due to `AudioBlock` mishandling raw pointer memory layout under Emscripten)
 
 **How it's exposed to JavaScript:**
 The class is exposed via Emscripten's `embind` system (`EMSCRIPTEN_BINDINGS` macro). This generates JavaScript bindings so the AudioWorklet can call C++ methods like `engine.setFreq(440)` or `engine.process(ptr, 128)` directly.
@@ -48,7 +49,7 @@ The AudioWorklet is a browser API for real-time audio processing. It runs on a d
 1. Main thread fetches `audio-engine.js` (the Emscripten glue code) as text
 2. Main thread sends the script text to the worklet via `postMessage`
 3. Worklet evaluates the script using `new Function()`, calls `createAudioEngine()` to instantiate the WASM module
-4. Worklet creates a `SineOscillator` instance and calls `setSampleRate()`
+4. Worklet creates a `SineOscillator` instance and calls `prepare()`
 
 **Audio processing flow (called ~344 times/second at 44.1kHz):**
 1. Browser calls `process(inputs, outputs)` with a 128-sample output buffer
@@ -78,7 +79,7 @@ The build uses three tools together:
 
 **Emscripten** is a C++ to WebAssembly compiler. The `emcmake` wrapper sets CMake's toolchain file so that `em++` is used instead of `clang++`/`g++`. The output is a `.js` file (Emscripten glue code) with WASM embedded inline (`SINGLE_FILE=1`).
 
-**CMake** ties it together. The target is a plain `add_executable` (not `juce_add_plugin`) linking only headless JUCE modules: `juce_core` and `juce_audio_basics`. No GUI, no audio device I/O. The `juce_dsp` module was removed after switching to manual sine wave generation.
+**CMake** ties it together. The target is a plain `add_executable` (not `juce_add_plugin`) linking headless JUCE modules: `juce_core`, `juce_audio_basics`, and `juce_dsp`. No GUI, no audio device I/O.
 
 ### Key Emscripten Flags
 
