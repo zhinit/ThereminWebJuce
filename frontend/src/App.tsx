@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import "./App.css";
 
 function App() {
-  const [isPlaying, setIsPlaying] = useState(false);
+  // const [isPlaying, setIsPlaying] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
@@ -24,8 +24,17 @@ function App() {
     node.port.onmessage = (e) => {
       if (e.data.type === "ready") {
         setIsReady(true);
+        loadSample();
       }
     };
+
+    const loadSample = async () => {
+      const kickFile = await fetch("/kick.wav");
+      const arrayBuffer = await kickFile.arrayBuffer();
+      const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+      const samples = audioBuffer.getChannelData(0);
+      node.port.postMessage({ type: "loadSample", samples })
+    }
 
     // Send the script code to the worklet
     node.port.postMessage({ type: "init", scriptCode });
@@ -34,7 +43,7 @@ function App() {
     workletNodeRef.current = node;
   };
 
-  const togglePlay = async () => {
+  const triggerSample = async () => {
     if (!audioContextRef.current) {
       await initAudio();
     }
@@ -43,22 +52,16 @@ function App() {
       await audioContextRef.current.resume();
     }
 
-    if (isPlaying) {
-      workletNodeRef.current?.port.postMessage({ type: "stop" });
-    } else {
-      workletNodeRef.current?.port.postMessage({ type: "play" });
-    }
-    setIsPlaying(!isPlaying);
+    workletNodeRef.current?.port.postMessage({ type: "play" });
   };
 
   return (
     <div>
-      <h1>C++ JUCE WASM Saw Wave with Filter POC</h1>
+      <h1>C++ JUCE WASM Sampler POC</h1>
       <button
-        onClick={togglePlay}
-        style={{ padding: "1rem 2rem", fontSize: "1.2rem" }}
+        onPointerDown={triggerSample}
       >
-        {isPlaying ? "Stop" : "Play 110Hz"}
+        Press Me!
       </button>
       {!isReady && audioContextRef.current && <p>Loading WASM...</p>}
     </div>

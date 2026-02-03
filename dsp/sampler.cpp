@@ -5,7 +5,7 @@ class Sampler {
 public:
     Sampler() = default;
 
-    void setPlaying(bool playing) { playing_ = playing; }
+    // void setPlaying(bool playing) { playing_ = playing; }
 
     void loadSample(uintptr_t samplePtr, size_t sampleLength) {
         sampleData_ = reinterpret_cast<float*>(samplePtr);
@@ -15,7 +15,7 @@ public:
     void prepare(float sampleRate) {
         sampleRate_ = sampleRate;
         playbackPosition_ = 0;
-        sampleIsPlaying_ = false;
+        // sampleIsPlaying_ = false;
     }
 
     void trigger() {
@@ -42,7 +42,7 @@ public:
 
 private:
     float sampleRate_ = 44100.0f;
-    bool playing_ = false;
+    // bool playing_ = false;
 
     float* sampleData_;
     size_t sampleLength_;
