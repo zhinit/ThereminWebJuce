@@ -63,7 +63,6 @@ private:
 EMSCRIPTEN_BINDINGS(audio_module) {
     emscripten::class_<Sampler>("Sampler")
         .constructor()
-        // .function("setPlaying", &Sampler::setPlaying)
         .function("loadSample", &Sampler::loadSample)
         .function("trigger", &Sampler::trigger)
         .function("prepare", &Sampler::prepare)

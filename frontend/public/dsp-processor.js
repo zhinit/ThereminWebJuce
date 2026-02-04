@@ -28,6 +28,10 @@ class DSPProcessor extends AudioWorkletProcessor {
     if (data.type === "play") {
       this.engine?.trigger();
     }
+    // when ui send loop msg
+    if (data.type === "loop") {
+      this.engine?.setLooping(data.inLoop);
+    }
     // // when ui sends stop msg
     // if (data.type === "stop") {
     //   this.engine?.setPlaying(false);
