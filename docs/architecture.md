@@ -7,9 +7,11 @@ This project compiles JUCE's C++ DSP code to WebAssembly and runs it in the brow
 ```
 React UI (App.tsx)
     |
-    | 1. fetch kick.wav, decode to Float32Array
-    | 2. postMessage("loadSample", samples) → copy to WASM heap
-    | 3. postMessage("play") → trigger playback
+    | 1. fetch ir.wav, decode to Float32Array, interleave stereo channels
+    | 2. postMessage("loadIR", irSamples) → copy to WASM heap
+    | 3. fetch kick.wav, decode to Float32Array
+    | 4. postMessage("loadSample", samples) → copy to WASM heap
+    | 5. postMessage("loop", true/false) → start/stop looping
     v
 AudioWorklet (dsp-processor.js)
     |
@@ -17,30 +19,48 @@ AudioWorklet (dsp-processor.js)
     v
 WASM Module (sampler.cpp compiled by Emscripten)
     |
-    | Copies samples from loaded buffer to output, advances playback position
+    | 1. Copies samples from loaded buffer to stereo output
+    | 2. Auto-retriggers at BPM interval if looping
+    | 3. Applies FFT-based convolution reverb (custom implementation)
     v
-AudioWorklet copies buffer to browser audio output
+AudioWorklet copies stereo buffers to browser audio output
     |
     v
-Speakers
+Speakers (stereo)
 ```
 
 ## The Three Layers
 
 ### 1. C++ DSP Layer (`dsp/sampler.cpp`)
 
-This is the audio engine. It plays back a sample that was loaded from JavaScript.
+This is the audio engine. It plays back a sample that was loaded from JavaScript, with looping and convolution reverb.
+
+**Classes:**
+- `ConvolutionEngine` — Single-channel FFT-based convolution using uniform partitioned overlap-add
+- `StereoConvolutionReverb` — Wrapper that runs two `ConvolutionEngine` instances (one per channel) with wet/dry mix
+- `Sampler` — Main class that handles sample playback, looping, and reverb
 
 **How the sampler works:**
 - Stores a pointer to sample data (`sampleData_`) and its length (`sampleLength_`), loaded via `loadSample()`
-- Maintains a `playbackPosition_` that advances through the sample each `process()` call
-- `trigger()` resets `playbackPosition_` to 0 to restart playback
-- When `playbackPosition_ >= sampleLength_`, outputs silence (0.0f)
+- Maintains a `samplePosition_` that advances through the sample each `process()` call
+- `trigger()` resets `samplePosition_` to 0 to restart playback
+- When `samplePosition_ >= sampleLength_`, outputs silence (0.0f)
+- Loop mode: tracks `loopPosition_` and auto-triggers when it exceeds `samplesPerBeat_`
+- Convolution reverb: `StereoConvolutionReverb` processes the stereo output at the end of each `process()` call
+
+**How convolution reverb works:**
+- IR loaded via `loadImpulseResponse(ptr, length, numChannels)` — partitions IR into 384-sample segments, FFTs each
+- Uses `juce::dsp::FFT` with order 9 (512 samples) for frequency-domain processing
+- Each `process()` call: FFT input → complex multiply-accumulate with all IR segments → inverse FFT → overlap-add
+- Ring buffer of FFT'd input segments allows efficient convolution with long IRs
+- Stereo IR: left channel IR convolves with left input, right with right
+- Wet/dry mix controlled via `setReverbMix(wetLevel, dryLevel)`
+
+**Stereo output:**
+The `process()` method takes two buffer pointers (left and right channels). The mono sample is written to both channels, then `convolutionReverb_.process()` adds stereo convolution reverb.
 
 **How it's exposed to JavaScript:**
-The class is exposed via Emscripten's `embind` system (`EMSCRIPTEN_BINDINGS` macro). This generates JavaScript bindings so the AudioWorklet can call C++ methods like `engine.loadSample(ptr, len)`, `engine.trigger()`, or `engine.process(ptr, 128)` directly.
-
-The `process()` method takes a `uintptr_t` (a raw memory address in the WASM heap) and a sample count. It writes float samples directly into WASM heap memory at that address.
+The class is exposed via Emscripten's `embind` system (`EMSCRIPTEN_BINDINGS` macro). This generates JavaScript bindings so the AudioWorklet can call C++ methods like `engine.loadSample(ptr, len)`, `engine.loadImpulseResponse(ptr, len, channels)`, `engine.trigger()`, or `engine.process(leftPtr, rightPtr, 128)` directly.
 
 ### 2. AudioWorklet Layer (`frontend/public/dsp-processor.js`)
 
@@ -53,6 +73,14 @@ The AudioWorklet is a browser API for real-time audio processing. It runs on a d
 4. Worklet creates a `Sampler` instance and calls `prepare()`
 5. Worklet sends `"ready"` message back to main thread
 
+**IR loading flow:**
+1. Main thread fetches and decodes `ir.wav` into an `AudioBuffer`
+2. Main thread interleaves stereo channels into a single `Float32Array`
+3. Main thread sends `{ type: "loadIR", irSamples, irLength, numChannels }` to worklet
+4. Worklet allocates WASM heap memory via `module._malloc(irSamples.length * 4)`
+5. Worklet copies samples into heap via `HEAPF32.set(irSamples, ptr / 4)`
+6. Worklet calls `engine.loadImpulseResponse(ptr, irLength, numChannels)`
+
 **Sample loading flow:**
 1. Main thread fetches and decodes `kick.wav` into a `Float32Array`
 2. Main thread sends `{ type: "loadSample", samples }` to worklet
@@ -61,23 +89,25 @@ The AudioWorklet is a browser API for real-time audio processing. It runs on a d
 5. Worklet calls `engine.loadSample(ptr, samples.length)`
 
 **Audio processing flow (called ~344 times/second at 44.1kHz):**
-1. Browser calls `process(inputs, outputs)` with a 128-sample output buffer
-2. Worklet allocates WASM heap memory via `module._malloc()` (reuses if already allocated)
-3. Worklet calls `engine.process(heapPtr, 128)` — C++ writes samples into WASM heap
-4. Worklet creates a `Float32Array` view into the WASM heap at that address
-5. Worklet copies the samples into the browser's output buffer via `output.set(wasmOutput)`
+1. Browser calls `process(inputs, outputs)` with stereo 128-sample output buffers
+2. Worklet allocates two WASM heap buffers (left/right) via `module._malloc()` (reuses if already allocated)
+3. Worklet calls `engine.process(leftPtr, rightPtr, 128)` — C++ writes stereo samples into WASM heap
+4. Worklet creates `Float32Array` views into the WASM heap for each channel
+5. Worklet copies the samples into the browser's stereo output buffers
 
 **Why the memory dance?**
 JavaScript's `Float32Array` output buffer lives in JS memory. C++ writes into WASM linear memory (a separate `ArrayBuffer`). You can't pass the JS buffer directly to WASM — you have to allocate space in the WASM heap, let C++ write there, then copy back to JS.
 
 ### 3. React UI Layer (`frontend/src/App.tsx`)
 
-A minimal React app with a single button. It:
+A minimal React app with two buttons (Cue and Play/Pause). It:
 1. Creates an `AudioContext` on first click (browsers require user gesture)
 2. Loads the AudioWorklet processor module
-3. Creates an `AudioWorkletNode` and connects it to `ctx.destination` (speakers)
-4. Waits for `"ready"` message, then fetches `kick.wav`, decodes it with `decodeAudioData()`, and sends the samples to the worklet
-5. Sends `play` messages to trigger the sample on button clicks
+3. Creates an `AudioWorkletNode` with stereo output (`outputChannelCount: [2]`) and connects it to `ctx.destination`
+4. Waits for `"ready"` message, then:
+   - Fetches `ir.wav`, decodes it, interleaves stereo channels, and sends to worklet for convolution reverb
+   - Fetches `kick.wav`, decodes it with `decodeAudioData()`, and sends the samples to the worklet
+5. "Cue" button sends `play` message for single trigger; "Play/Pause" toggles `loop` message for 140 BPM looping
 
 ## Build System
 

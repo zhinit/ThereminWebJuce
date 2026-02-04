@@ -51,18 +51,54 @@ A single React button that starts/stops a 140 BPM loop playing a kick sample thr
 
 **Done when**: Clicking the button starts a looping kick at 140 BPM. Clicking again stops it. ✅
 
-### 3. Reverb
+### 3. Reverb ✅ COMPLETE (with fallback)
 
-**What**: Add reverb to the kick sound using an impulse response.
+**What**: Add reverb to the kick sound.
 
-**How**:
-- First attempt: `juce::dsp::Convolution`
-  - Add one IR WAV file to `frontend/public/`
-  - Load IR the same way as the kick sample (decode in JS, copy to WASM heap)
-  - In C++ engine: create a `juce::dsp::Convolution` instance, load the IR buffer, process kick output through it, mix wet + dry to final output
-- If convolution doesn't work in WASM: fall back to `juce::Reverb` (algorithmic, no IR needed)
+**Attempted approach**: `juce::dsp::Convolution` with impulse response file.
 
-**Done when**: Kick loop has audible reverb tail.
+**Why it failed**: `juce::dsp::Convolution` uses background threading for IR loading. Enabling WASM pthreads (`-pthread`, `USE_PTHREADS=1`) got past the atomics errors, but JUCE's thread implementation for WASM is incomplete — `juce::Thread::createNativeThread()` and `juce::Thread::killThread()` are undefined symbols.
+
+**Fallback**: Used `juce::Reverb` (Freeverb-based algorithmic reverb). No threading required.
+
+**Implementation notes**:
+- `reverb_.setSampleRate()` in `prepare()`
+- `reverb_.setParameters()` to configure roomSize, damping, wetLevel, dryLevel, width
+- `reverb_.processStereo(left, right, numSamples)` at end of `process()`
+- Updated to stereo output: `process()` takes left/right buffer pointers, AudioWorklet allocates two heap buffers
+
+**Limitation**: Algorithmic reverb sounds more "digital" than convolution. No variety from loading different IR files.
+
+**Done when**: Kick loop has audible reverb tail. ✅
+
+### 4. Custom Convolution Reverb ✅ COMPLETE
+
+**What**: Build a simple convolution reverb that works in WASM without threading.
+
+**Why**: `juce::dsp::Convolution` requires threading. A custom implementation can run entirely in the audio thread.
+
+**Approach chosen**: FFT-based convolution using uniform partitioned overlap-add algorithm.
+
+**Implementation notes**:
+- Created `ConvolutionEngine` class in `sampler.cpp` (~200 lines)
+- Algorithm based on JUCE's `juce::dsp::Convolution` internals, rewritten to run synchronously
+- Uses `juce::dsp::FFT` (order 9 = 512 samples) for frequency-domain processing
+- IR partitioned into 384-sample segments, each pre-FFT'd at load time
+- Ring buffer of FFT'd input segments for efficient convolution with all IR segments
+- Overlap-add handles reverb tail accumulation between 128-sample blocks
+- `StereoConvolutionReverb` wrapper handles stereo IR files (deinterleaves channels)
+- Wet/dry mix control via `setReverbMix(wetLevel, dryLevel)`
+
+**IR loading flow**:
+1. React fetches `ir.wav`, decodes with Web Audio API
+2. Interleaves stereo channels into single `Float32Array`
+3. Sends to AudioWorklet via `postMessage({ type: "loadIR", irSamples, irLength, numChannels })`
+4. Worklet allocates WASM heap, copies data, calls `engine.loadImpulseResponse()`
+5. C++ partitions IR, FFTs each segment, stores for real-time convolution
+
+**Memory usage**: ~5.5 MB for a 1.46s stereo IR (ir.wav)
+
+**Done when**: Can load an IR file and hear convolution reverb on the kick loop. ✅
 
 ## Build Notes
 
@@ -72,10 +108,12 @@ A single React button that starts/stops a 140 BPM loop playing a kick sample thr
 
 ## What This Proves
 
-If all three milestones work, the following are confirmed for WASM:
+All four milestones confirm the following work in WASM:
 - Loading external audio buffers across the JS/WASM boundary
 - Sample-accurate playback and triggering from C++
 - BPM-based sequencing inside the audio process loop
-- Convolution reverb (or that a fallback is needed)
+- Stereo audio output
+- Algorithmic reverb (`juce::Reverb`)
+- **FFT-based convolution reverb** using `juce::dsp::FFT` with custom overlap-add implementation
 
-Everything else needed for KickWithReverb (filters, distortion, compression, limiter) uses basic JUCE DSP classes already proven by the POC's `StateVariableTPTFilter`.
+Everything needed for KickWithReverb (filters, distortion, compression, limiter, convolution reverb) uses JUCE DSP classes that work in WASM without threading.

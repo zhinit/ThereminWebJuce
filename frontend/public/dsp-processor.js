@@ -33,6 +33,12 @@ class DSPProcessor extends AudioWorkletProcessor {
     if (data.type === "loop") {
       this.engine?.setLooping(data.inLoop);
     }
+    // load impulse response for convolution reverb
+    if (data.type === "loadIR") {
+      const irPtr = this.module._malloc(data.irSamples.length * 4);
+      this.module.HEAPF32.set(data.irSamples, irPtr / 4);
+      this.engine?.loadImpulseResponse(irPtr, data.irLength, data.numChannels);
+    }
     // // when ui sends stop msg
     // if (data.type === "stop") {
     //   this.engine?.setPlaying(false);

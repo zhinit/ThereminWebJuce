@@ -25,9 +25,30 @@ function App() {
 
     node.port.onmessage = async (e) => {
       if (e.data.type === "ready") {
+        await loadIR();
         await loadSample();
         setPlaybackReady(true);
       }
+    };
+
+    const loadIR = async () => {
+      const irFile = await fetch("/ir.wav");
+      const arrayBuffer = await irFile.arrayBuffer();
+      const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+
+      const numChannels = audioBuffer.numberOfChannels;
+      const length = audioBuffer.length;
+      const irSamples = new Float32Array(length * numChannels);
+
+      // Interleave channels for stereo IR
+      for (let ch = 0; ch < numChannels; ch++) {
+        const channelData = audioBuffer.getChannelData(ch);
+        for (let i = 0; i < length; i++) {
+          irSamples[i * numChannels + ch] = channelData[i];
+        }
+      }
+
+      node.port.postMessage({ type: "loadIR", irSamples, irLength: length, numChannels });
     };
 
     const loadSample = async () => {
