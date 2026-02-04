@@ -2,8 +2,7 @@ import { useState, useRef } from "react";
 import "./App.css";
 
 function App() {
-  // const [isPlaying, setIsPlaying] = useState(false);
-  const [isReady, setIsReady] = useState(false);
+  const [inLoop, setInLoop] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
 
@@ -43,7 +42,7 @@ function App() {
     workletNodeRef.current = node;
   };
 
-  const triggerSample = async () => {
+  const handleCue = async () => {
     if (!audioContextRef.current) {
       await initAudio();
     }
@@ -55,15 +54,34 @@ function App() {
     workletNodeRef.current?.port.postMessage({ type: "play" });
   };
 
+  const handlePlayPauseButton = async () => {
+    if (!audioContextRef.current) {
+      await initAudio();
+    }
+
+    if (audioContextRef.current?.state === "suspended") {
+      await audioContextRef.current.resume();
+    }
+    
+    const inLoopNew = !inLoop;
+    setInLoop(inLoopNew);
+
+    workletNodeRef.current?.port.postMessage({ type: "loop", inLoop: inLoopNew })
+  }
+
   return (
     <div>
       <h1>C++ JUCE WASM Sampler POC</h1>
       <button
-        onPointerDown={triggerSample}
+        onPointerDown={handleCue}
       >
-        Press Me!
+        Cue
       </button>
-      {!isReady && audioContextRef.current && <p>Loading WASM...</p>}
+      <button
+        onClick={handlePlayPauseButton}
+      >
+        Play/Pause
+      </button>
     </div>
   );
 }
