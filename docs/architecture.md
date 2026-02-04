@@ -7,15 +7,17 @@ This project compiles JUCE's C++ DSP code to WebAssembly and runs it in the brow
 ```
 React UI (App.tsx)
     |
-    | postMessage("play"/"stop")
+    | 1. fetch kick.wav, decode to Float32Array
+    | 2. postMessage("loadSample", samples) → copy to WASM heap
+    | 3. postMessage("play") → trigger playback
     v
 AudioWorklet (dsp-processor.js)
     |
     | calls process() every ~2.9ms (128 samples at 44.1kHz)
     v
-WASM Module (oscillator.cpp compiled by Emscripten)
+WASM Module (sampler.cpp compiled by Emscripten)
     |
-    | Manual sine wave with phase accumulation fills a float buffer
+    | Copies samples from loaded buffer to output, advances playback position
     v
 AudioWorklet copies buffer to browser audio output
     |
@@ -25,19 +27,18 @@ Speakers
 
 ## The Three Layers
 
-### 1. C++ DSP Layer (`dsp/oscillator.cpp`)
+### 1. C++ DSP Layer (`dsp/sampler.cpp`)
 
-This is the audio engine. It generates audio samples using manual phase-accumulation saw wave synthesis, filtered through a JUCE low-pass filter.
+This is the audio engine. It plays back a sample that was loaded from JavaScript.
 
-**How the oscillator works:**
-- Maintains a `phase_` accumulator that increments by `2π * frequency / sampleRate` each sample
-- Outputs a saw wave via `phase_ / π - 1.0` (linear ramp from -1 to +1 per cycle)
-- Wraps phase at `2π` to prevent numerical overflow
-- The saw output is passed through a `juce::dsp::StateVariableTPTFilter` set to low-pass mode, which smooths the harsh harmonics
-- The original sine wave approach was ported from the Theremin VST's `SineWave` class after `juce::dsp::Oscillator` produced distorted output in the WASM environment (likely due to `AudioBlock` mishandling raw pointer memory layout under Emscripten)
+**How the sampler works:**
+- Stores a pointer to sample data (`sampleData_`) and its length (`sampleLength_`), loaded via `loadSample()`
+- Maintains a `playbackPosition_` that advances through the sample each `process()` call
+- `trigger()` resets `playbackPosition_` to 0 to restart playback
+- When `playbackPosition_ >= sampleLength_`, outputs silence (0.0f)
 
 **How it's exposed to JavaScript:**
-The class is exposed via Emscripten's `embind` system (`EMSCRIPTEN_BINDINGS` macro). This generates JavaScript bindings so the AudioWorklet can call C++ methods like `engine.setFreq(440)` or `engine.process(ptr, 128)` directly.
+The class is exposed via Emscripten's `embind` system (`EMSCRIPTEN_BINDINGS` macro). This generates JavaScript bindings so the AudioWorklet can call C++ methods like `engine.loadSample(ptr, len)`, `engine.trigger()`, or `engine.process(ptr, 128)` directly.
 
 The `process()` method takes a `uintptr_t` (a raw memory address in the WASM heap) and a sample count. It writes float samples directly into WASM heap memory at that address.
 
@@ -49,7 +50,15 @@ The AudioWorklet is a browser API for real-time audio processing. It runs on a d
 1. Main thread fetches `audio-engine.js` (the Emscripten glue code) as text
 2. Main thread sends the script text to the worklet via `postMessage`
 3. Worklet evaluates the script using `new Function()`, calls `createAudioEngine()` to instantiate the WASM module
-4. Worklet creates a `SineOscillator` instance and calls `prepare()`
+4. Worklet creates a `Sampler` instance and calls `prepare()`
+5. Worklet sends `"ready"` message back to main thread
+
+**Sample loading flow:**
+1. Main thread fetches and decodes `kick.wav` into a `Float32Array`
+2. Main thread sends `{ type: "loadSample", samples }` to worklet
+3. Worklet allocates WASM heap memory via `module._malloc(samples.length * 4)`
+4. Worklet copies samples into heap via `HEAPF32.set(samples, ptr / 4)`
+5. Worklet calls `engine.loadSample(ptr, samples.length)`
 
 **Audio processing flow (called ~344 times/second at 44.1kHz):**
 1. Browser calls `process(inputs, outputs)` with a 128-sample output buffer
@@ -63,11 +72,12 @@ JavaScript's `Float32Array` output buffer lives in JS memory. C++ writes into WA
 
 ### 3. React UI Layer (`frontend/src/App.tsx`)
 
-A minimal React app with a single play/stop button. It:
+A minimal React app with a single button. It:
 1. Creates an `AudioContext` on first click (browsers require user gesture)
 2. Loads the AudioWorklet processor module
 3. Creates an `AudioWorkletNode` and connects it to `ctx.destination` (speakers)
-4. Sends `play`/`stop` messages to the worklet via `postMessage`
+4. Waits for `"ready"` message, then fetches `kick.wav`, decodes it with `decodeAudioData()`, and sends the samples to the worklet
+5. Sends `play` messages to trigger the sample on button clicks
 
 ## Build System
 

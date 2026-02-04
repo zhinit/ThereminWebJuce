@@ -8,7 +8,7 @@ A single React button that starts/stops a 140 BPM loop playing a kick sample thr
 
 ## Milestones
 
-### 1. Sample Playback
+### 1. Sample Playback ✅ COMPLETE
 
 **What**: Button click triggers a single kick sample through the JUCE WASM engine.
 
@@ -19,7 +19,13 @@ A single React button that starts/stops a 140 BPM loop playing a kick sample thr
 - Expose `trigger()` and a `loadSample(uintptr_t bufferPtr, int numSamples)` method via Embind
 - AudioWorklet forwards "trigger" and "loadSample" messages from React to the engine
 
-**Done when**: Clicking the button plays the kick sample through speakers.
+**Implementation notes**:
+- Created `dsp/sampler.cpp` with `Sampler` class (replaced `oscillator.cpp`)
+- Sample loading flow: JS decodes WAV → allocates WASM heap with `_malloc` → copies with `HEAPF32.set()` → calls `loadSample(ptr, len)`
+- `trigger()` resets `playbackPosition_` to 0; `process()` copies samples until position exceeds length, then outputs silence
+- Known issue: first click has slightly soft transient (timing issue between init and first trigger)
+
+**Done when**: Clicking the button plays the kick sample through speakers. ✅
 
 ### 2. Loop
 

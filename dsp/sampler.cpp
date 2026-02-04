@@ -5,7 +5,7 @@ class Sampler {
 public:
     Sampler() = default;
 
-    // void setPlaying(bool playing) { playing_ = playing; }
+    void setLooping(bool inLoop) { inLoop_ = inLoop; }
 
     void loadSample(uintptr_t samplePtr, size_t sampleLength) {
         sampleData_ = reinterpret_cast<float*>(samplePtr);
@@ -14,26 +14,30 @@ public:
 
     void prepare(float sampleRate) {
         sampleRate_ = sampleRate;
-        playbackPosition_ = 0;
-        // sampleIsPlaying_ = false;
+        samplePosition_ = 0;
+        samplesPerBeat_ = sampleRate / bpm_ * 60;
     }
 
     void trigger() {
-        playbackPosition_ = 0;
+        samplePosition_ = 0;
     }
 
     void process(uintptr_t outputPtr, int numSamples) {
         float* output = reinterpret_cast<float*>(outputPtr);
 
-        // if (!playing_) {
-        //     std::fill(output, output + numSamples, 0.0f);
-        //     return;
-        // }
-
+        
         for (int i = 0; i < numSamples; ++i) {
-            if (playbackPosition_ < sampleLength_) {
-                output[i] = sampleData_[playbackPosition_];
-                ++playbackPosition_;
+            if (inLoop_) {
+                if (loopPosition_ > samplesPerBeat_) {
+                    loopPosition_ = 0;
+                    trigger();
+                } else {
+                    ++loopPosition_;
+                }
+            }
+            if (samplePosition_ < sampleLength_) {
+                output[i] = sampleData_[samplePosition_];
+                ++samplePosition_;
             } else {
                 output[i] = 0.0f;
             }
@@ -41,12 +45,19 @@ public:
     }
 
 private:
+    // general vars
     float sampleRate_ = 44100.0f;
-    // bool playing_ = false;
 
-    float* sampleData_;
-    size_t sampleLength_;
-    size_t playbackPosition_;
+    // sample vars
+    float* sampleData_ = nullptr;
+    size_t sampleLength_ = 0;
+    size_t samplePosition_ = 0;
+
+    // loop vars
+    float bpm_ = 140;
+    size_t samplesPerBeat_ = 0;
+    size_t loopPosition_ = 0;
+    bool inLoop_ = false;
 };
 
 EMSCRIPTEN_BINDINGS(audio_module) {
@@ -56,5 +67,6 @@ EMSCRIPTEN_BINDINGS(audio_module) {
         .function("loadSample", &Sampler::loadSample)
         .function("trigger", &Sampler::trigger)
         .function("prepare", &Sampler::prepare)
-        .function("process", &Sampler::process);
+        .function("process", &Sampler::process)
+        .function("setLooping", &Sampler::setLooping);
 }
