@@ -3,7 +3,8 @@ class DSPProcessor extends AudioWorkletProcessor {
     super();
     this.engine = null;
     this.module = null;
-    this.heapBuffer = null;
+    this.heapBufferLeft = null;
+    this.heapBufferRight = null;
     this.port.onmessage = (e) => this.handleMessage(e.data);
   }
 
@@ -42,27 +43,35 @@ class DSPProcessor extends AudioWorkletProcessor {
     // if engine or module missing, return but keep processor alive
     if (!this.engine || !this.module) return true;
 
-    // set browser output first output bus, first channel on that bus (mono)
-    const output = outputs[0][0];
-    // set numSamples to size of browser audio buffer
-    const numSamples = output.length;
+    // get stereo output channels
+    const leftOutput = outputs[0][0];
+    const rightOutput = outputs[0][1];
+    const numSamples = leftOutput.length;
 
-    // if buffer has not been allocated or is too small
-    if (!this.heapBuffer || this.heapBuffer.length < numSamples) {
-      if (this.heapBuffer) this.module._free(this.heapBuffer);
-      this.heapBuffer = this.module._malloc(numSamples * 4);
+    // allocate heap buffers if needed
+    if (!this.heapBufferLeft || this.heapBufferLeft.length < numSamples) {
+      if (this.heapBufferLeft) this.module._free(this.heapBufferLeft);
+      if (this.heapBufferRight) this.module._free(this.heapBufferRight);
+      this.heapBufferLeft = this.module._malloc(numSamples * 4);
+      this.heapBufferRight = this.module._malloc(numSamples * 4);
     }
 
     // call wasm process function which puts result in wasm heap memory
-    this.engine.process(this.heapBuffer, numSamples);
+    this.engine.process(this.heapBufferLeft, this.heapBufferRight, numSamples);
 
     // pull audio from wasm heap memory so it can be played in browser
-    const wasmOutput = new Float32Array(
+    const wasmLeft = new Float32Array(
       this.module.HEAPF32.buffer,
-      this.heapBuffer,
+      this.heapBufferLeft,
       numSamples,
     );
-    output.set(wasmOutput);
+    const wasmRight = new Float32Array(
+      this.module.HEAPF32.buffer,
+      this.heapBufferRight,
+      numSamples,
+    );
+    leftOutput.set(wasmLeft);
+    rightOutput.set(wasmRight);
 
     // call me again when the next block of samples is needed
     return true;

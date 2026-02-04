@@ -18,7 +18,9 @@ function App() {
 
     await ctx.audioWorklet.addModule("/dsp-processor.js");
 
-    const node = new AudioWorkletNode(ctx, "dsp-processor");
+    const node = new AudioWorkletNode(ctx, "dsp-processor", {
+      outputChannelCount: [2],
+    });
     node.connect(ctx.destination);
 
     node.port.onmessage = async (e) => {

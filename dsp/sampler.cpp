@@ -43,9 +43,10 @@ public:
 
   void trigger() { samplePosition_ = 0; }
 
-  void process(uintptr_t outputPtr, int numSamples)
+  void process(uintptr_t leftPtr, uintptr_t rightPtr, int numSamples)
   {
-    float* output = reinterpret_cast<float*>(outputPtr);
+    float* left = reinterpret_cast<float*>(leftPtr);
+    float* right = reinterpret_cast<float*>(rightPtr);
 
     for (int i = 0; i < numSamples; ++i) {
       if (inLoop_) {
@@ -56,15 +57,17 @@ public:
           ++loopPosition_;
         }
       }
+
+      float sample = 0.0f;
       if (samplePosition_ < sampleLength_) {
-        output[i] = sampleData_[samplePosition_];
+        sample = sampleData_[samplePosition_];
         ++samplePosition_;
-      } else {
-        output[i] = 0.0f;
       }
+      left[i] = sample;
+      right[i] = sample;
     }
 
-    reverb_.processMono(output, numSamples);
+    reverb_.processStereo(left, right, numSamples);
   }
 
 private:
