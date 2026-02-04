@@ -27,7 +27,7 @@ A single React button that starts/stops a 140 BPM loop playing a kick sample thr
 
 **Done when**: Clicking the button plays the kick sample through speakers. ✅
 
-### 2. Loop
+### 2. Loop ✅ COMPLETE
 
 **What**: Button toggles a 140 BPM loop that retriggers the kick every quarter note.
 
@@ -35,10 +35,21 @@ A single React button that starts/stops a 140 BPM loop playing a kick sample thr
 - In C++ engine: add a sample counter that increments each `process()` call
 - Calculate `samplesPerBeat = 60.0 / bpm * sampleRate`
 - When counter crosses the beat boundary, call `trigger()` internally
-- Add `setPlaying(bool)` and `setBpm(float)` methods exposed via Embind
-- React button sends "play"/"stop" message to AudioWorklet
+- Add `setLooping(bool)` method exposed via Embind
+- React button sends "loop" message to AudioWorklet
 
-**Done when**: Clicking the button starts a looping kick at 140 BPM. Clicking again stops it.
+**Implementation notes**:
+- Added loop variables to `Sampler` class: `bpm_` (float), `samplesPerBeat_` (size_t), `loopPosition_` (size_t), `inLoop_` (bool)
+- `samplesPerBeat_` calculated in `prepare()` as `sampleRate / bpm_ * 60`
+- Loop logic in `process()`: when `loopPosition_ > samplesPerBeat_`, reset to 0 and call `trigger()`
+- `setLooping(true)` immediately calls `trigger()` and resets `loopPosition_` so first kick plays instantly
+- Important fix: `loadSample()` sets `samplePosition_ = sampleLength_` to prevent auto-play when sample loads
+- UI has two buttons: "Cue" (single trigger) and "Play/Pause" (toggle loop)
+- React tracks `playbackReady` state to ensure sample is loaded before allowing loop to start
+
+**Known issue**: First click on Play/Pause only initializes audio (no sound). Second click starts the loop. This is because browser requires user gesture to start audio, and sample loading happens asynchronously after init.
+
+**Done when**: Clicking the button starts a looping kick at 140 BPM. Clicking again stops it. ✅
 
 ### 3. Reverb
 

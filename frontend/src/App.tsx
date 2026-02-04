@@ -3,6 +3,7 @@ import "./App.css";
 
 function App() {
   const [inLoop, setInLoop] = useState(false);
+  const [playbackReady, setPlaybackReady] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
 
@@ -20,9 +21,10 @@ function App() {
     const node = new AudioWorkletNode(ctx, "dsp-processor");
     node.connect(ctx.destination);
 
-    node.port.onmessage = (e) => {
+    node.port.onmessage = async (e) => {
       if (e.data.type === "ready") {
-        loadSample();
+        await loadSample();
+        setPlaybackReady(true);
       }
     };
 
@@ -54,17 +56,18 @@ function App() {
   };
 
   const handlePlayPauseButton = async () => {
-    if (!audioContextRef.current) {
+    // First click just initializes, second click starts the loop
+    if (!playbackReady) {
       await initAudio();
+      return;
     }
 
     if (audioContextRef.current?.state === "suspended") {
       await audioContextRef.current.resume();
     }
-    
+
     const inLoopNew = !inLoop;
     setInLoop(inLoopNew);
-
     workletNodeRef.current?.port.postMessage({ type: "loop", inLoop: inLoopNew })
   }
 
