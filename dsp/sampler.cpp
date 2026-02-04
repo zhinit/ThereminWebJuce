@@ -5,7 +5,13 @@ class Sampler {
 public:
     Sampler() = default;
 
-    void setLooping(bool inLoop) { inLoop_ = inLoop; }
+    void setLooping(bool inLoop) { 
+        inLoop_ = inLoop; 
+        if (inLoop_) {
+            trigger();
+            loopPosition_ = 0;
+        }
+    }
 
     void loadSample(uintptr_t samplePtr, size_t sampleLength) {
         sampleData_ = reinterpret_cast<float*>(samplePtr);

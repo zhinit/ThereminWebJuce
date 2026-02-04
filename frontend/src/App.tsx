@@ -22,7 +22,6 @@ function App() {
 
     node.port.onmessage = (e) => {
       if (e.data.type === "ready") {
-        setIsReady(true);
         loadSample();
       }
     };
@@ -78,7 +77,7 @@ function App() {
         Cue
       </button>
       <button
-        onClick={handlePlayPauseButton}
+        onPointerDown={handlePlayPauseButton}
       >
         Play/Pause
       </button>
