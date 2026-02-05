@@ -22,7 +22,6 @@ public:
   {
     sampleData_ = reinterpret_cast<float*>(samplePtr);
     sampleLength_ = sampleLength;
-    samplePosition_ = sampleLength_;
   }
 
   void loadImpulseResponse(uintptr_t irPtr, size_t irLength, int numChannels)

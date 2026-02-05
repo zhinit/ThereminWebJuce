@@ -20,7 +20,7 @@ AudioWorklet (dsp-processor.js)
     |
     | calls process() every ~2.9ms (128 samples at 44.1kHz)
     v
-WASM Module (sampler.cpp compiled by Emscripten)
+WASM Module (dsp/*.cpp compiled by Emscripten)
     |
     | 1. Copies samples from loaded buffer to stereo output
     | 2. Auto-retriggers at BPM interval if looping
@@ -36,16 +36,26 @@ Speakers (stereo)
 
 ## The Three Layers
 
-### 1. C++ DSP Layer (`dsp/sampler.cpp`)
+### 1. C++ DSP Layer (`dsp/`)
 
-This is the audio engine. It plays back a sample that was loaded from JavaScript, with looping, distortion, OTT compression, and convolution reverb.
+The audio engine is split across four source files, each with a single responsibility. Header files (`.h`) declare the classes so they can be shared across files; implementation files (`.cpp`) contain the logic.
+
+```
+dsp/
+  sampler.cpp          — Sampler class (playback, looping, effects chain) + EMSCRIPTEN_BINDINGS
+  distortion.h/.cpp    — Distortion class (JUCE WaveShaper wrapper)
+  ott.h/.cpp           — BandCompressor + OTTCompressor (multiband compression)
+  convolution.h/.cpp   — ConvolutionEngine + StereoConvolutionReverb (FFT convolution)
+  oscillator.cpp       — SineOscillator (standalone, not used by sampler)
+```
 
 **Classes:**
-- `ConvolutionEngine` — Single-channel FFT-based convolution using uniform partitioned overlap-add
-- `StereoConvolutionReverb` — Wrapper that runs two `ConvolutionEngine` instances (one per channel) with wet/dry mix
-- `BandCompressor` — Single-band compressor with envelope follower, upward and downward compression, and ratio interpolation
-- `OTTCompressor` — 3-band "Over The Top" multiband compressor using Linkwitz-Riley crossovers and three `BandCompressor` instances
-- `Sampler` — Main class that handles sample playback, looping, and the full effects chain
+- `ConvolutionEngine` (`convolution.h`) — Single-channel FFT-based convolution using uniform partitioned overlap-add
+- `StereoConvolutionReverb` (`convolution.h`) — Wrapper that runs two `ConvolutionEngine` instances (one per channel) with wet/dry mix
+- `BandCompressor` (`ott.h`) — Single-band compressor with envelope follower, upward and downward compression, and ratio interpolation
+- `OTTCompressor` (`ott.h`) — 3-band "Over The Top" multiband compressor using Linkwitz-Riley crossovers and three `BandCompressor` instances
+- `Distortion` (`distortion.h`) — Wraps a `juce::dsp::WaveShaper` with a drive parameter and asymmetric saturation transfer function
+- `Sampler` (`sampler.cpp`) — Top-level orchestrator that handles sample playback, looping, and runs the full effects chain. Owns a `Distortion`, `OTTCompressor`, and `StereoConvolutionReverb` as members.
 
 **How the sampler works:**
 - Stores a pointer to sample data (`sampleData_`) and its length (`sampleLength_`), loaded via `loadSample()`
@@ -53,18 +63,16 @@ This is the audio engine. It plays back a sample that was loaded from JavaScript
 - `trigger()` resets `samplePosition_` to 0 to restart playback
 - When `samplePosition_ >= sampleLength_`, outputs silence (0.0f)
 - Loop mode: tracks `loopPosition_` and auto-triggers when it exceeds `samplesPerBeat_`
-- Waveshaper: `juce::dsp::WaveShaper` applies a nonlinear transfer function to add harmonic distortion, processed via `juce::dsp::AudioBlock` and `ProcessContextReplacing`
-- OTT compressor: `OTTCompressor` applies 3-band multiband compression after the waveshaper
-- Convolution reverb: `StereoConvolutionReverb` processes the stereo output at the end of each `process()` call
+- Delegates to `Distortion`, `OTTCompressor`, and `StereoConvolutionReverb` in sequence during `process()`
 
-**How the waveshaper works:**
+**How the distortion works** (`distortion.cpp`)**:**
 - Uses `juce::dsp::WaveShaper<float, std::function<float(float)>>` — a JUCE DSP processor that applies a transfer function sample-by-sample
 - Currently uses `tanh(x * drive) + 0.1 * x²` — asymmetric saturation that adds both odd harmonics (from tanh) and even harmonics (from the x² term), giving a warmer tube-like character
-- Drive parameter controlled via `setWaveshaperDrive(drive)` — higher values push the signal harder into the nonlinear region, generating more harmonics
+- Drive parameter controlled via `setDrive(drive)` — higher values push the signal harder into the nonlinear region, generating more harmonics
 - Alternative transfer functions are commented out in the source for easy swapping (tanh, atan, soft/hard clip, wavefold)
 - Signal chain position: after kick sample playback, before OTT compressor
 
-**How the OTT compressor works:**
+**How the OTT compressor works** (`ott.cpp`)**:**
 - Splits the stereo signal into 3 frequency bands using `juce::dsp::LinkwitzRileyFilter` (LR4, 24dB/oct) crossovers at 100 Hz and 2500 Hz
 - Each band has its own `BandCompressor` with independent settings:
 
@@ -84,7 +92,7 @@ This is the audio engine. It plays back a sample that was loaded from JavaScript
 - **Band splitting**: cascade approach — LR lowpass/highpass at 100 Hz splits into low and mid+high, then LR lowpass/highpass at 2500 Hz splits mid+high into mid and high. Linkwitz-Riley filters provide perfect reconstruction when bands are summed.
 - Signal chain position: after waveshaper, before convolution reverb
 
-**How convolution reverb works:**
+**How convolution reverb works** (`convolution.cpp`)**:**
 - IR loaded via `loadImpulseResponse(ptr, length, numChannels)` — partitions IR into 384-sample segments, FFTs each
 - Uses `juce::dsp::FFT` with order 9 (512 samples) for frequency-domain processing
 - Each `process()` call: FFT input → complex multiply-accumulate with all IR segments → inverse FFT → overlap-add
@@ -93,7 +101,7 @@ This is the audio engine. It plays back a sample that was loaded from JavaScript
 - Wet/dry mix controlled via `setReverbMix(wetLevel, dryLevel)`
 
 **Stereo output:**
-The `process()` method takes two buffer pointers (left and right channels). The mono sample is written to both channels, then the waveshaper adds harmonic distortion, then the OTT compressor applies multiband compression, then `convolutionReverb_.process()` adds stereo convolution reverb.
+The `Sampler::process()` method takes two buffer pointers (left and right channels). The mono sample is written to both channels, then the signal passes through the effects chain: `distortion_.process()` → `ottCompressor_.process()` → `convolutionReverb_.process()`.
 
 **How it's exposed to JavaScript:**
 The class is exposed via Emscripten's `embind` system (`EMSCRIPTEN_BINDINGS` macro). This generates JavaScript bindings so the AudioWorklet can call C++ methods like `engine.loadSample(ptr, len)`, `engine.loadImpulseResponse(ptr, len, channels)`, `engine.trigger()`, `engine.process(leftPtr, rightPtr, 128)`, `engine.setWaveshaperDrive(drive)`, `engine.setOTTAmount(amount)`, or `engine.setReverbMix(wet, dry)` directly.
@@ -159,7 +167,7 @@ The build uses three tools together:
 
 **Emscripten** is a C++ to WebAssembly compiler. The `emcmake` wrapper sets CMake's toolchain file so that `em++` is used instead of `clang++`/`g++`. The output is a `.js` file (Emscripten glue code) with WASM embedded inline (`SINGLE_FILE=1`).
 
-**CMake** ties it together. The target is a plain `add_executable` (not `juce_add_plugin`) linking headless JUCE modules: `juce_core`, `juce_audio_basics`, and `juce_dsp`. No GUI, no audio device I/O.
+**CMake** ties it together. The target is a plain `add_executable` compiling four source files (`dsp/sampler.cpp`, `dsp/convolution.cpp`, `dsp/ott.cpp`, `dsp/distortion.cpp`) and linking headless JUCE modules: `juce_core`, `juce_audio_basics`, and `juce_dsp`. No GUI, no audio device I/O.
 
 ### Key Emscripten Flags
 
