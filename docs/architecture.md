@@ -21,7 +21,8 @@ WASM Module (sampler.cpp compiled by Emscripten)
     |
     | 1. Copies samples from loaded buffer to stereo output
     | 2. Auto-retriggers at BPM interval if looping
-    | 3. Applies FFT-based convolution reverb (custom implementation)
+    | 3. Applies waveshaper distortion (JUCE WaveShaper)
+    | 4. Applies FFT-based convolution reverb (custom implementation)
     v
 AudioWorklet copies stereo buffers to browser audio output
     |
@@ -46,7 +47,15 @@ This is the audio engine. It plays back a sample that was loaded from JavaScript
 - `trigger()` resets `samplePosition_` to 0 to restart playback
 - When `samplePosition_ >= sampleLength_`, outputs silence (0.0f)
 - Loop mode: tracks `loopPosition_` and auto-triggers when it exceeds `samplesPerBeat_`
+- Waveshaper: `juce::dsp::WaveShaper` applies a nonlinear transfer function to add harmonic distortion, processed via `juce::dsp::AudioBlock` and `ProcessContextReplacing`
 - Convolution reverb: `StereoConvolutionReverb` processes the stereo output at the end of each `process()` call
+
+**How the waveshaper works:**
+- Uses `juce::dsp::WaveShaper<float, std::function<float(float)>>` — a JUCE DSP processor that applies a transfer function sample-by-sample
+- Currently uses `tanh(x * drive) + 0.1 * x²` — asymmetric saturation that adds both odd harmonics (from tanh) and even harmonics (from the x² term), giving a warmer tube-like character
+- Drive parameter controlled via `setWaveshaperDrive(drive)` — higher values push the signal harder into the nonlinear region, generating more harmonics
+- Alternative transfer functions are commented out in the source for easy swapping (tanh, atan, soft/hard clip, wavefold)
+- Signal chain position: after kick sample playback, before convolution reverb
 
 **How convolution reverb works:**
 - IR loaded via `loadImpulseResponse(ptr, length, numChannels)` — partitions IR into 384-sample segments, FFTs each
@@ -57,7 +66,7 @@ This is the audio engine. It plays back a sample that was loaded from JavaScript
 - Wet/dry mix controlled via `setReverbMix(wetLevel, dryLevel)`
 
 **Stereo output:**
-The `process()` method takes two buffer pointers (left and right channels). The mono sample is written to both channels, then `convolutionReverb_.process()` adds stereo convolution reverb.
+The `process()` method takes two buffer pointers (left and right channels). The mono sample is written to both channels, then the waveshaper adds harmonic distortion, then `convolutionReverb_.process()` adds stereo convolution reverb.
 
 **How it's exposed to JavaScript:**
 The class is exposed via Emscripten's `embind` system (`EMSCRIPTEN_BINDINGS` macro). This generates JavaScript bindings so the AudioWorklet can call C++ methods like `engine.loadSample(ptr, len)`, `engine.loadImpulseResponse(ptr, len, channels)`, `engine.trigger()`, or `engine.process(leftPtr, rightPtr, 128)` directly.
