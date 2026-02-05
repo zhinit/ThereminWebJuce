@@ -332,6 +332,165 @@ private:
   float dryLevel_ = 0.7f;
 };
 
+class BandCompressor
+{
+public:
+  BandCompressor(float attackMs, float releaseMs,
+                 float downThresholdDb, float downRatio,
+                 float upThresholdDb, float upRatio)
+    : attackMs_(attackMs)
+    , releaseMs_(releaseMs)
+    , downThresholdDb_(downThresholdDb)
+    , downRatio_(downRatio)
+    , upThresholdDb_(upThresholdDb)
+    , upRatio_(upRatio)
+  {
+  }
+
+  void prepare(float sampleRate)
+  {
+    attackCoeff_ = std::exp(-1.0f / (attackMs_ * 0.001f * sampleRate));
+    releaseCoeff_ = std::exp(-1.0f / (releaseMs_ * 0.001f * sampleRate));
+    envelopeL_ = 0.0f;
+    envelopeR_ = 0.0f;
+  }
+
+  void process(float* left, float* right, int numSamples, float amount)
+  {
+    float effectiveDownRatio = 1.0f + amount * (downRatio_ - 1.0f);
+    float effectiveUpRatio = 1.0f + amount * (upRatio_ - 1.0f);
+
+    for (int i = 0; i < numSamples; ++i) {
+      left[i] = processSample(left[i], envelopeL_,
+                               effectiveDownRatio, effectiveUpRatio);
+      right[i] = processSample(right[i], envelopeR_,
+                                effectiveDownRatio, effectiveUpRatio);
+    }
+  }
+
+private:
+  float processSample(float sample, float& envelope,
+                      float downRatio, float upRatio)
+  {
+    float level = std::abs(sample);
+    float coeff = (level > envelope) ? attackCoeff_ : releaseCoeff_;
+    envelope = coeff * envelope + (1.0f - coeff) * level;
+
+    float envelopeDb = 20.0f * std::log10(std::max(envelope, 1e-6f));
+
+    float gainDb = 0.0f;
+    if (envelopeDb > downThresholdDb_) {
+      gainDb = (1.0f - 1.0f / downRatio) * (downThresholdDb_ - envelopeDb);
+    } else if (envelopeDb < upThresholdDb_) {
+      gainDb = (1.0f - 1.0f / upRatio) * (upThresholdDb_ - envelopeDb);
+    }
+
+    float gain = std::pow(10.0f, gainDb / 20.0f);
+    return sample * gain;
+  }
+
+  float attackMs_, releaseMs_;
+  float downThresholdDb_, downRatio_;
+  float upThresholdDb_, upRatio_;
+  float attackCoeff_ = 0.0f;
+  float releaseCoeff_ = 0.0f;
+  float envelopeL_ = 0.0f;
+  float envelopeR_ = 0.0f;
+};
+
+class OTTCompressor
+{
+public:
+  OTTCompressor()
+    : lowComp_(10.0f, 100.0f, -20.0f, 10.0f, -40.0f, 3.0f)
+    , midComp_(5.0f, 75.0f, -20.0f, 15.0f, -40.0f, 4.0f)
+    , highComp_(1.0f, 50.0f, -20.0f, 20.0f, -40.0f, 5.0f)
+  {
+  }
+
+  void prepare(float sampleRate)
+  {
+    juce::dsp::ProcessSpec spec{ sampleRate, 128u, 2u };
+
+    lowCrossoverLP_.setCutoffFrequency(100.0f);
+    lowCrossoverLP_.setType(
+      juce::dsp::LinkwitzRileyFilter<float>::Type::lowpass);
+    lowCrossoverLP_.prepare(spec);
+
+    lowCrossoverHP_.setCutoffFrequency(100.0f);
+    lowCrossoverHP_.setType(
+      juce::dsp::LinkwitzRileyFilter<float>::Type::highpass);
+    lowCrossoverHP_.prepare(spec);
+
+    highCrossoverLP_.setCutoffFrequency(2500.0f);
+    highCrossoverLP_.setType(
+      juce::dsp::LinkwitzRileyFilter<float>::Type::lowpass);
+    highCrossoverLP_.prepare(spec);
+
+    highCrossoverHP_.setCutoffFrequency(2500.0f);
+    highCrossoverHP_.setType(
+      juce::dsp::LinkwitzRileyFilter<float>::Type::highpass);
+    highCrossoverHP_.prepare(spec);
+
+    lowComp_.prepare(sampleRate);
+    midComp_.prepare(sampleRate);
+    highComp_.prepare(sampleRate);
+  }
+
+  void process(float* left, float* right, int numSamples)
+  {
+    // Split into 3 bands per sample
+    for (int i = 0; i < numSamples; ++i) {
+      float lowL = lowCrossoverLP_.processSample(0, left[i]);
+      float lowR = lowCrossoverLP_.processSample(1, right[i]);
+      float restL = lowCrossoverHP_.processSample(0, left[i]);
+      float restR = lowCrossoverHP_.processSample(1, right[i]);
+
+      float midL = highCrossoverLP_.processSample(0, restL);
+      float midR = highCrossoverLP_.processSample(1, restR);
+      float highL = highCrossoverHP_.processSample(0, restL);
+      float highR = highCrossoverHP_.processSample(1, restR);
+
+      lowBandL_[i] = lowL;   lowBandR_[i] = lowR;
+      midBandL_[i] = midL;   midBandR_[i] = midR;
+      highBandL_[i] = highL; highBandR_[i] = highR;
+    }
+
+    // Compress each band
+    lowComp_.process(lowBandL_.data(), lowBandR_.data(), numSamples, amount_);
+    midComp_.process(midBandL_.data(), midBandR_.data(), numSamples, amount_);
+    highComp_.process(highBandL_.data(), highBandR_.data(), numSamples, amount_);
+
+    // Sum bands back together with makeup gain
+    float makeupDb = amount_ * makeupGainDb_;
+    float makeupGain = std::pow(10.0f, makeupDb / 20.0f);
+
+    for (int i = 0; i < numSamples; ++i) {
+      left[i] = (lowBandL_[i] + midBandL_[i] + highBandL_[i]) * makeupGain;
+      right[i] = (lowBandR_[i] + midBandR_[i] + highBandR_[i]) * makeupGain;
+    }
+  }
+
+  void setAmount(float amount) { amount_ = amount; }
+
+private:
+  juce::dsp::LinkwitzRileyFilter<float> lowCrossoverLP_;
+  juce::dsp::LinkwitzRileyFilter<float> lowCrossoverHP_;
+  juce::dsp::LinkwitzRileyFilter<float> highCrossoverLP_;
+  juce::dsp::LinkwitzRileyFilter<float> highCrossoverHP_;
+
+  BandCompressor lowComp_;
+  BandCompressor midComp_;
+  BandCompressor highComp_;
+
+  std::array<float, 128> lowBandL_{}, lowBandR_{};
+  std::array<float, 128> midBandL_{}, midBandR_{};
+  std::array<float, 128> highBandL_{}, highBandR_{};
+
+  float amount_ = 0.0f;
+  static constexpr float makeupGainDb_ = 18.0f;
+};
+
 class Sampler
 {
 public:
@@ -366,6 +525,7 @@ public:
     samplesPerBeat_ = sampleRate_ / bpm_ * 60;
 
     convolutionReverb_.prepare(sampleRate);
+    ottCompressor_.prepare(sampleRate);
 
     waveshaper_.functionToUse = [this](float x) {
       // Symmetric — odd harmonics only:
@@ -415,6 +575,8 @@ public:
     juce::dsp::ProcessContextReplacing<float> context(block);
     waveshaper_.process(context);
 
+    ottCompressor_.process(left, right, numSamples);
+
     convolutionReverb_.process(left, right, numSamples);
   }
 
@@ -424,6 +586,8 @@ public:
   }
 
   void setWaveshaperDrive(float drive) { drive_ = drive; }
+
+  void setOTTAmount(float amount) { ottCompressor_.setAmount(amount); }
 
 private:
   // general vars
@@ -444,6 +608,9 @@ private:
   juce::dsp::WaveShaper<float, std::function<float(float)>> waveshaper_;
   float drive_ = 6.0f;
 
+  // OTT compressor
+  OTTCompressor ottCompressor_;
+
   // convolution reverb
   StereoConvolutionReverb convolutionReverb_;
 };
@@ -459,5 +626,6 @@ EMSCRIPTEN_BINDINGS(audio_module)
     .function("process", &Sampler::process)
     .function("setLooping", &Sampler::setLooping)
     .function("setReverbMix", &Sampler::setReverbMix)
-    .function("setWaveshaperDrive", &Sampler::setWaveshaperDrive);
+    .function("setWaveshaperDrive", &Sampler::setWaveshaperDrive)
+    .function("setOTTAmount", &Sampler::setOTTAmount);
 }

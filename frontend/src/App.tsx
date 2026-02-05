@@ -4,6 +4,9 @@ import "./App.css";
 function App() {
   const [inLoop, setInLoop] = useState(false);
   const [playbackReady, setPlaybackReady] = useState(false);
+  const [ottAmount, setOttAmount] = useState(0);
+  const [distortionAmount, setDistortionAmount] = useState(0);
+  const [reverbAmount, setReverbAmount] = useState(0.3);
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
 
@@ -94,6 +97,26 @@ function App() {
     workletNodeRef.current?.port.postMessage({ type: "loop", inLoop: inLoopNew })
   }
 
+  const handleOTTAmount = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const amount = parseFloat(e.target.value);
+    setOttAmount(amount);
+    workletNodeRef.current?.port.postMessage({ type: "ottAmount", amount });
+  }
+
+  const handleDistortionAmount = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const amount = parseFloat(e.target.value);
+    setDistortionAmount(amount);
+    // Map 0-1 to drive 1-20 (drive=1 is nearly clean, drive=20 is heavy)
+    const drive = 1.0 + amount * 19.0;
+    workletNodeRef.current?.port.postMessage({ type: "distortionAmount", drive });
+  }
+
+  const handleReverbAmount = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const amount = parseFloat(e.target.value);
+    setReverbAmount(amount);
+    workletNodeRef.current?.port.postMessage({ type: "reverbMix", wet: amount, dry: 1 - amount });
+  }
+
   return (
     <div>
       <h1>C++ JUCE WASM Sampler POC</h1>
@@ -107,6 +130,39 @@ function App() {
       >
         Play/Pause
       </button>
+      <div>
+        <label>Distortion: {distortionAmount.toFixed(2)}</label>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={distortionAmount}
+          onChange={handleDistortionAmount}
+        />
+      </div>
+      <div>
+        <label>OTT Amount: {ottAmount.toFixed(2)}</label>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={ottAmount}
+          onChange={handleOTTAmount}
+        />
+      </div>
+      <div>
+        <label>Reverb: {reverbAmount.toFixed(2)}</label>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={reverbAmount}
+          onChange={handleReverbAmount}
+        />
+      </div>
     </div>
   );
 }

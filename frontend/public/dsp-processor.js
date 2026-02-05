@@ -39,10 +39,18 @@ class DSPProcessor extends AudioWorkletProcessor {
       this.module.HEAPF32.set(data.irSamples, irPtr / 4);
       this.engine?.loadImpulseResponse(irPtr, data.irLength, data.numChannels);
     }
-    // // when ui sends stop msg
-    // if (data.type === "stop") {
-    //   this.engine?.setPlaying(false);
-    // }
+    // set OTT amount
+    if (data.type === "ottAmount") {
+      this.engine?.setOTTAmount(data.amount);
+    }
+    // set waveshaper drive
+    if (data.type === "distortionAmount") {
+      this.engine?.setWaveshaperDrive(data.drive);
+    }
+    // set reverb dry/wet
+    if (data.type === "reverbMix") {
+      this.engine?.setReverbMix(data.wet, data.dry);
+    }
   }
 
   process(inputs, outputs, parameters) {
