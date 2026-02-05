@@ -35,7 +35,12 @@ if(EMSCRIPTEN)
   endif()
 endif()
 
-add_executable(audio-engine dsp/sampler.cpp)
+add_executable(audio-engine
+  dsp/sampler.cpp
+  dsp/convolution.cpp
+  dsp/ott.cpp
+  dsp/distortion.cpp
+)
 
 target_compile_definitions(audio-engine PRIVATE
     JUCE_USE_CURL=0

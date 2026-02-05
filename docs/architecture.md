@@ -12,6 +12,9 @@ React UI (App.tsx)
     | 3. fetch kick.wav, decode to Float32Array
     | 4. postMessage("loadSample", samples) → copy to WASM heap
     | 5. postMessage("loop", true/false) → start/stop looping
+    | 6. postMessage("distortionAmount", drive) → set waveshaper drive
+    | 7. postMessage("ottAmount", amount) → set OTT compression amount
+    | 8. postMessage("reverbMix", wet, dry) → set reverb dry/wet
     v
 AudioWorklet (dsp-processor.js)
     |
@@ -22,7 +25,8 @@ WASM Module (sampler.cpp compiled by Emscripten)
     | 1. Copies samples from loaded buffer to stereo output
     | 2. Auto-retriggers at BPM interval if looping
     | 3. Applies waveshaper distortion (JUCE WaveShaper)
-    | 4. Applies FFT-based convolution reverb (custom implementation)
+    | 4. Applies OTT multiband compression (custom implementation)
+    | 5. Applies FFT-based convolution reverb (custom implementation)
     v
 AudioWorklet copies stereo buffers to browser audio output
     |
@@ -34,12 +38,14 @@ Speakers (stereo)
 
 ### 1. C++ DSP Layer (`dsp/sampler.cpp`)
 
-This is the audio engine. It plays back a sample that was loaded from JavaScript, with looping and convolution reverb.
+This is the audio engine. It plays back a sample that was loaded from JavaScript, with looping, distortion, OTT compression, and convolution reverb.
 
 **Classes:**
 - `ConvolutionEngine` — Single-channel FFT-based convolution using uniform partitioned overlap-add
 - `StereoConvolutionReverb` — Wrapper that runs two `ConvolutionEngine` instances (one per channel) with wet/dry mix
-- `Sampler` — Main class that handles sample playback, looping, and reverb
+- `BandCompressor` — Single-band compressor with envelope follower, upward and downward compression, and ratio interpolation
+- `OTTCompressor` — 3-band "Over The Top" multiband compressor using Linkwitz-Riley crossovers and three `BandCompressor` instances
+- `Sampler` — Main class that handles sample playback, looping, and the full effects chain
 
 **How the sampler works:**
 - Stores a pointer to sample data (`sampleData_`) and its length (`sampleLength_`), loaded via `loadSample()`
@@ -48,6 +54,7 @@ This is the audio engine. It plays back a sample that was loaded from JavaScript
 - When `samplePosition_ >= sampleLength_`, outputs silence (0.0f)
 - Loop mode: tracks `loopPosition_` and auto-triggers when it exceeds `samplesPerBeat_`
 - Waveshaper: `juce::dsp::WaveShaper` applies a nonlinear transfer function to add harmonic distortion, processed via `juce::dsp::AudioBlock` and `ProcessContextReplacing`
+- OTT compressor: `OTTCompressor` applies 3-band multiband compression after the waveshaper
 - Convolution reverb: `StereoConvolutionReverb` processes the stereo output at the end of each `process()` call
 
 **How the waveshaper works:**
@@ -55,7 +62,27 @@ This is the audio engine. It plays back a sample that was loaded from JavaScript
 - Currently uses `tanh(x * drive) + 0.1 * x²` — asymmetric saturation that adds both odd harmonics (from tanh) and even harmonics (from the x² term), giving a warmer tube-like character
 - Drive parameter controlled via `setWaveshaperDrive(drive)` — higher values push the signal harder into the nonlinear region, generating more harmonics
 - Alternative transfer functions are commented out in the source for easy swapping (tanh, atan, soft/hard clip, wavefold)
-- Signal chain position: after kick sample playback, before convolution reverb
+- Signal chain position: after kick sample playback, before OTT compressor
+
+**How the OTT compressor works:**
+- Splits the stereo signal into 3 frequency bands using `juce::dsp::LinkwitzRileyFilter` (LR4, 24dB/oct) crossovers at 100 Hz and 2500 Hz
+- Each band has its own `BandCompressor` with independent settings:
+
+| | Low | Mid | High |
+|---|---|---|---|
+| Attack | 10ms | 5ms | 1ms |
+| Release | 100ms | 75ms | 50ms |
+| Downward threshold | -20dB | -20dB | -20dB |
+| Downward ratio | 10:1 | 15:1 | 20:1 |
+| Upward threshold | -40dB | -40dB | -40dB |
+| Upward ratio | 3:1 | 4:1 | 5:1 |
+
+- **Envelope follower**: one-pole filter with separate attack/release coefficients, tracking peak level per sample. Separate envelope state per stereo channel.
+- **Gain computation** (in dB): `gainDb = (1 - 1/ratio) * (threshold - envelopeDb)` — the same formula handles both upward (envelope below threshold → positive gain) and downward (envelope above threshold → negative gain) compression
+- **Amount control**: interpolates each ratio toward 1:1 — `effectiveRatio = 1.0 + amount * (targetRatio - 1.0)`. At amount=0, all ratios are 1:1 (no compression, no gain change). At amount=1, ratios hit their full values.
+- **Makeup gain**: 18dB of makeup gain scaled by amount to compensate for level reduction from heavy downward compression. `makeupGain = 10^(amount * 18 / 20)`
+- **Band splitting**: cascade approach — LR lowpass/highpass at 100 Hz splits into low and mid+high, then LR lowpass/highpass at 2500 Hz splits mid+high into mid and high. Linkwitz-Riley filters provide perfect reconstruction when bands are summed.
+- Signal chain position: after waveshaper, before convolution reverb
 
 **How convolution reverb works:**
 - IR loaded via `loadImpulseResponse(ptr, length, numChannels)` — partitions IR into 384-sample segments, FFTs each
@@ -66,10 +93,10 @@ This is the audio engine. It plays back a sample that was loaded from JavaScript
 - Wet/dry mix controlled via `setReverbMix(wetLevel, dryLevel)`
 
 **Stereo output:**
-The `process()` method takes two buffer pointers (left and right channels). The mono sample is written to both channels, then the waveshaper adds harmonic distortion, then `convolutionReverb_.process()` adds stereo convolution reverb.
+The `process()` method takes two buffer pointers (left and right channels). The mono sample is written to both channels, then the waveshaper adds harmonic distortion, then the OTT compressor applies multiband compression, then `convolutionReverb_.process()` adds stereo convolution reverb.
 
 **How it's exposed to JavaScript:**
-The class is exposed via Emscripten's `embind` system (`EMSCRIPTEN_BINDINGS` macro). This generates JavaScript bindings so the AudioWorklet can call C++ methods like `engine.loadSample(ptr, len)`, `engine.loadImpulseResponse(ptr, len, channels)`, `engine.trigger()`, or `engine.process(leftPtr, rightPtr, 128)` directly.
+The class is exposed via Emscripten's `embind` system (`EMSCRIPTEN_BINDINGS` macro). This generates JavaScript bindings so the AudioWorklet can call C++ methods like `engine.loadSample(ptr, len)`, `engine.loadImpulseResponse(ptr, len, channels)`, `engine.trigger()`, `engine.process(leftPtr, rightPtr, 128)`, `engine.setWaveshaperDrive(drive)`, `engine.setOTTAmount(amount)`, or `engine.setReverbMix(wet, dry)` directly.
 
 ### 2. AudioWorklet Layer (`frontend/public/dsp-processor.js`)
 
@@ -109,7 +136,7 @@ JavaScript's `Float32Array` output buffer lives in JS memory. C++ writes into WA
 
 ### 3. React UI Layer (`frontend/src/App.tsx`)
 
-A minimal React app with two buttons (Cue and Play/Pause). It:
+A minimal React app with two buttons (Cue and Play/Pause) and three parameter sliders. It:
 1. Creates an `AudioContext` on first click (browsers require user gesture)
 2. Loads the AudioWorklet processor module
 3. Creates an `AudioWorkletNode` with stereo output (`outputChannelCount: [2]`) and connects it to `ctx.destination`
@@ -117,6 +144,10 @@ A minimal React app with two buttons (Cue and Play/Pause). It:
    - Fetches `ir.wav`, decodes it, interleaves stereo channels, and sends to worklet for convolution reverb
    - Fetches `kick.wav`, decodes it with `decodeAudioData()`, and sends the samples to the worklet
 5. "Cue" button sends `play` message for single trigger; "Play/Pause" toggles `loop` message for 140 BPM looping
+6. Three range sliders control the effects chain in real time:
+   - **Distortion** (0–1): maps to waveshaper drive 1–20 via `drive = 1.0 + amount * 19.0`. At 0, the waveshaper is nearly linear.
+   - **OTT Amount** (0–1): scales compression ratios from 1:1 (transparent) to full OTT values
+   - **Reverb** (0–1): dry/wet mix. 0 = fully dry, 1 = fully wet (defaults to 0.3)
 
 ## Build System
 
